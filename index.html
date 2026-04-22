@@ -1,0 +1,686 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, collection, doc, onSnapshot, addDoc, updateDoc, deleteDoc, query, setDoc, getDoc, getDocs } from 'firebase/firestore';
+import { Home, Trophy, Target, Settings, LogOut, Medal, RefreshCw, Calendar, ChevronRight, Plus, Trash2, Edit3, Save, X, Star, AlertCircle, UserPlus, ShieldCheck, User as UserIcon, Zap, Clock, Tv, History, Info, Flame, Users, Layout } from 'lucide-react';
+
+// --- CONFIGURACIÓN FIREBASE ---
+const firebaseConfig = {
+  apiKey: "AIzaSyDxU1DHT6RK5ttzsvynlS7gyrN5ThkXD9Q",
+  authDomain: "cooptenjo-mundialista.firebaseapp.com",
+  databaseURL: "https://cooptenjo-mundialista-default-rtdb.firebaseio.com",
+  projectId: "cooptenjo-mundialista",
+  storageBucket: "cooptenjo-mundialista.firebasestorage.app",
+  messagingSenderId: "748680540417",
+  appId: "1:748680540417:web:6cda8f9294c3ef99d4eb00",
+  measurementId: "G-RDPDP4EG0C"
+};
+
+const countryToCode = {
+  "Canadá": "ca", "Marruecos": "ma", "Estados Unidos": "us", "Australia": "au",
+  "México": "mx", "Ghana": "gh", "Colombia": "co", "Alemania": "de",
+  "Brasil": "br", "Francia": "fr", "Argentina": "ar", "España": "es",
+  "Japón": "jp", "Inglaterra": "gb", "Portugal": "pt", "Italia": "it",
+  "Uruguay": "uy", "Bélgica": "be", "Países Bajos": "nl", "Croacia": "hr",
+  "Ecuador": "ec", "Suiza": "ch", "Dinamarca": "dk", "Corea del Sur": "kr",
+  "Senegal": "sn", "Irán": "ir", "Túnez": "tn", "Polonia": "pl", "Nueva Zelanda": "nz",
+  "Uzbekistán": "uz", "Jordania": "jo", "Paraguay": "py", "Egipto": "eg", "Argelia": "dz",
+  "Cabo Verde": "cv", "Sudáfrica": "za", "Catar": "qa", "Arabia Saudita": "sa",
+  "Costa de Marfil": "ci", "Noruega": "no", "Austria": "at", "Escocia": "gb-sct",
+  "Panamá": "pa", "Haití": "ht", "Curazao": "cw", "Suecia": "se", "Turquía": "tr",
+  "República Checa": "cz", "Bosnia y Herzegovina": "ba", "República Democrática del Congo": "cd",
+  "Irak": "iq"
+};
+
+const officialTeams = [
+  "Canadá", "Estados Unidos", "México", "Japón", "Nueva Zelanda", "Irán", "Argentina", "Uzbekistán",
+  "Corea del Sur", "Jordania", "Australia", "Brasil", "Ecuador", "Uruguay", "Colombia", "Paraguay",
+  "Marruecos", "Túnez", "Egipto", "Argelia", "Ghana", "Cabo Verde", "Sudáfrica", "Catar", "Inglaterra",
+  "Arabia Saudita", "Costa de Marfil", "Senegal", "Francia", "Croacia", "Portugal", "Noruega", "Alemania",
+  "Países Bajos", "Bélgica", "Austria", "Suiza", "España", "Escocia", "Panamá", "Haití", "Curazao",
+  "Suecia", "Turquía", "República Checa", "Bosnia y Herzegovina", "República Democrática del Congo", "Irak"
+].sort();
+
+const teamPlayers = {
+  "Canadá": ["Jonathan David", "Alphonso Davies", "Cyle Larin", "Tajon Buchanan"],
+  "Marruecos": ["Hakim Ziyech", "Youssef En-Nesyri", "Achraf Hakimi", "Brahim Díaz"],
+  "México": ["Santiago Giménez", "Hirving Lozano", "Henry Martín", "Edson Álvarez"],
+  "Ghana": ["Mohammed Kudus", "Inaki Williams", "Jordan Ayew", "Antoine Semenyo"],
+  "Colombia": ["Luis Díaz", "James Rodríguez", "Jhon Durán", "Richard Ríos", "Rafael Borré"],
+  "Alemania": ["Jamal Musiala", "Kai Havertz", "Niclas Füllkrug", "Florian Wirtz"],
+  "Brasil": ["Vinícius Júnior", "Rodrygo", "Neymar Jr", "Endrick", "Raphinha"],
+  "Argentina": ["Lionel Messi", "Julián Álvarez", "Lautaro Martínez", "Alexis Mac Allister"],
+  "España": ["Lamine Yamal", "Nico Williams", "Álvaro Morata", "Dani Olmo"],
+  "Francia": ["Kylian Mbappé", "Antoine Griezmann", "Ousmane Dembélé", "Marcus Thuram"]
+};
+
+const getFlagUrl = (countryName) => {
+  const code = countryToCode[countryName] || "un";
+  return `https://flagcdn.com/w160/${code}.png`;
+};
+
+export default function App() {
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('inicio');
+  const [loading, setLoading] = useState(true);
+  const [loginError, setLoginError] = useState("");
+  const [showProfile, setShowProfile] = useState(false);
+
+  const [users, setUsers] = useState([]);
+  const [matches, setMatches] = useState([]);
+  const [predictions, setPredictions] = useState([]);
+  const [brackets, setBrackets] = useState({});
+
+  const ensureDefaultUsers = async (existingUsers) => {
+    const adminExists = existingUsers.some(u => u.email === 'admin@cooptenjo.com');
+    if (!adminExists) {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'users'), {
+        name: 'Administrador Cooptenjo',
+        email: 'admin@cooptenjo.com',
+        password: '1234',
+        role: 'admin',
+        points: 0
+      });
+    }
+  };
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) { console.error("Error auth:", error); }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      if (!user) setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const baseDataPath = ['artifacts', appId, 'public', 'data'];
+    const unsubs = [];
+    
+    const collectionsList = ['users', 'matches', 'predictions'];
+    const setters = [setUsers, setMatches, setPredictions];
+    
+    collectionsList.forEach((colName, index) => {
+      const q = collection(db, ...baseDataPath, colName);
+      const unsub = onSnapshot(q, (snapshot) => {
+          const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setters[index](data);
+          if (colName === 'users') {
+            ensureDefaultUsers(data);
+            setLoading(false);
+          }
+        }, (err) => {
+          console.error(`Error ${colName}:`, err);
+          setLoading(false);
+        }
+      );
+      unsubs.push(unsub);
+    });
+    
+    return () => unsubs.forEach(unsub => unsub());
+  }, [firebaseUser]);
+
+  useEffect(() => {
+    if (!firebaseUser || !currentUser) return;
+    const bracketDocRef = doc(db, 'artifacts', appId, 'users', currentUser.id, 'bracket', 'main');
+    const unsub = onSnapshot(bracketDocRef, (docSnap) => { 
+        if (docSnap.exists()) setBrackets(docSnap.data()); 
+      }, (err) => console.error("Error brackets:", err)
+    );
+    return () => unsub();
+  }, [currentUser, firebaseUser]);
+
+  const login = (email, password) => {
+    const user = users.find(u => u.email.toLowerCase() === email.toLowerCase() && u.password === password);
+    if (user) { 
+      setCurrentUser(user); 
+      setActiveTab('inicio');
+      setLoginError("");
+    } else { 
+      setLoginError("Acceso denegado. Revisa tus credenciales."); 
+    }
+  };
+
+  const logout = () => { setCurrentUser(null); setActiveTab('inicio'); setLoginError(""); };
+
+  const formatColDate = (dateStr) => {
+    try {
+      const date = new Date(dateStr);
+      return date.toLocaleString('es-CO', {
+        timeZone: 'America/Bogota', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true
+      });
+    } catch (e) { return "Por definir"; }
+  };
+
+  if (loading) return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-[#004d3d] text-white">
+      <div className="animate-spin mb-4"><RefreshCw size={48} /></div>
+      <p className="font-black uppercase tracking-widest animate-pulse">Cargando Cooptenjo...</p>
+    </div>
+  );
+
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-[#002b22] flex items-center justify-center p-4 relative overflow-hidden">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-green-500/10 rounded-full blur-[100px]"></div>
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-yellow-500/10 rounded-full blur-[100px]"></div>
+        <div className="max-w-md w-full bg-white/95 backdrop-blur-xl rounded-[3rem] shadow-[0_32px_64px_rgba(0,0,0,0.5)] overflow-hidden relative z-10 border border-white/20">
+          <div className="bg-gradient-to-br from-[#006e51] via-[#004d3d] to-[#002b22] p-12 text-center text-white relative">
+            <Trophy className="w-20 h-20 mx-auto mb-6 text-yellow-400 drop-shadow-[0_0_15px_rgba(250,204,21,0.5)]" />
+            <h1 className="text-3xl font-black uppercase tracking-tighter leading-none mb-2">COOPTENJO</h1>
+            <p className="text-yellow-400 text-xs font-black uppercase tracking-[0.3em]">Mundialista 2026</p>
+          </div>
+          <div className="p-10">
+            {loginError && <div className="mb-6 p-4 bg-red-50 border-l-4 border-red-500 text-red-700 text-xs font-bold rounded-xl">{loginError}</div>}
+            <form onSubmit={(e) => { e.preventDefault(); login(e.target.email.value, e.target.password.value); }} className="space-y-6">
+              <input type="email" name="email" className="w-full pl-6 pr-4 py-4 rounded-2xl bg-gray-50 border-2 border-gray-100 focus:border-[#006e51] outline-none font-bold" placeholder="usuario@cooptenjo.com" required />
+              <input type="password" name="password" className="w-full pl-6 pr-4 py-4 rounded-2xl bg-gray-50 border-2 border-gray-100 focus:border-[#006e51] outline-none font-bold" placeholder="Pin de Acceso" required />
+              <button type="submit" className="w-full bg-[#006e51] text-white py-5 rounded-2xl font-black uppercase shadow-lg hover:bg-[#008a65] transition-all">Iniciar Sesión</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#f8fafc] pb-24 md:pb-0 font-sans text-gray-900">
+      {showProfile && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
+          <div className="bg-white w-full max-w-lg rounded-[3rem] overflow-hidden shadow-2xl">
+            <div className="bg-[#004d3d] p-8 text-white relative">
+              <button onClick={() => setShowProfile(false)} className="absolute top-6 right-6 text-white/50 hover:text-white"><X /></button>
+              <h3 className="font-black text-2xl uppercase tracking-tighter">{currentUser.name}</h3>
+              <p className="text-4xl font-black text-yellow-400 mt-4">{currentUser.points || 0} PTS</p>
+            </div>
+            <div className="p-8 max-h-[60vh] overflow-y-auto">
+                <h4 className="text-[10px] font-black uppercase text-gray-400 mb-4 tracking-widest">Historial Reciente</h4>
+                {predictions.filter(p => p.userId === currentUser.id && p.pointsEarned > 0).map(p => (
+                  <div key={p.id} className="flex justify-between items-center p-4 bg-gray-50 rounded-2xl mb-2">
+                    <span className="text-[10px] font-black uppercase">Partido #{p.matchId.slice(-4)}</span>
+                    <span className="bg-green-100 text-green-700 px-3 py-1 rounded-lg font-black">+{p.pointsEarned}</span>
+                  </div>
+                ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <header className="bg-[#004d3d] text-white sticky top-0 z-50 p-4 shadow-2xl border-b-4 border-yellow-400">
+        <div className="max-w-7xl mx-auto flex justify-between items-center">
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => setActiveTab('inicio')}>
+            <Trophy className="text-yellow-400 w-6 h-6" />
+            <span className="font-black text-lg tracking-tighter uppercase">COOPTENJO</span>
+          </div>
+          <nav className="hidden md:flex gap-2">
+            <NavBtn label="Inicio" active={activeTab === 'inicio'} onClick={() => setActiveTab('inicio')} />
+            <NavBtn label="Pronósticos" active={activeTab === 'predicciones'} onClick={() => setActiveTab('predicciones')} />
+            <NavBtn label="Cuadro de Honor" active={activeTab === 'honor'} onClick={() => setActiveTab('honor')} />
+            <NavBtn label="Ranking" active={activeTab === 'ranking'} onClick={() => setActiveTab('ranking')} />
+            {currentUser.role === 'admin' && <NavBtn label="Admin" active={activeTab === 'admin'} onClick={() => setActiveTab('admin')} isAdmin />}
+          </nav>
+          <div className="flex items-center gap-4">
+            <div className="text-right cursor-pointer" onClick={() => setShowProfile(true)}>
+              <p className="font-black text-yellow-400 text-xl">{currentUser.points || 0} <span className="text-[10px]">PTS</span></p>
+            </div>
+            <button onClick={logout} className="p-3 bg-red-600/20 hover:bg-red-600 text-red-500 hover:text-white rounded-2xl transition-all"><LogOut size={20} /></button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto p-4 md:p-8">
+        {activeTab === 'inicio' && <HomeView matches={matches} setActiveTab={setActiveTab} formatColDate={formatColDate} />}
+        {activeTab === 'predicciones' && <PredictionsView firebaseUser={firebaseUser} currentUser={currentUser} matches={matches} predictions={predictions} formatColDate={formatColDate} />}
+        {activeTab === 'honor' && <HonorView firebaseUser={firebaseUser} currentUser={currentUser} matches={matches} bracketData={brackets} />}
+        {activeTab === 'ranking' && <RankingView users={users} currentUser={currentUser} />}
+        {activeTab === 'admin' && currentUser.role === 'admin' && <AdminView firebaseUser={firebaseUser} users={users} matches={matches} predictions={predictions} formatColDate={formatColDate} />}
+      </main>
+
+      <nav className="md:hidden fixed bottom-6 left-6 right-6 bg-white/95 backdrop-blur-lg shadow-2xl rounded-[2.5rem] flex justify-around p-5 z-50 border border-gray-100">
+        <Home className={activeTab === 'inicio' ? 'text-[#006e51]' : 'text-gray-300'} onClick={() => setActiveTab('inicio')} />
+        <Target className={activeTab === 'predicciones' ? 'text-[#006e51]' : 'text-gray-300'} onClick={() => setActiveTab('predicciones')} />
+        <Star className={activeTab === 'honor' ? 'text-[#006e51]' : 'text-gray-300'} onClick={() => setActiveTab('honor')} />
+        <Medal className={activeTab === 'ranking' ? 'text-[#006e51]' : 'text-gray-300'} onClick={() => setActiveTab('ranking')} />
+        {currentUser.role === 'admin' && <Settings className={activeTab === 'admin' ? 'text-red-600' : 'text-gray-300'} onClick={() => setActiveTab('admin')} />}
+      </nav>
+    </div>
+  );
+}
+
+// --- SUBVISTAS ---
+
+function HomeView({ matches, setActiveTab, formatColDate }) {
+  const nextMatch = useMemo(() => {
+    const now = new Date();
+    return matches.filter(m => new Date(m.date) > now).sort((a, b) => new Date(a.date) - new Date(b.date))[0];
+  }, [matches]);
+
+  return (
+    <div className="space-y-10 animate-in slide-in-from-bottom-4 duration-700">
+      <div className="bg-gradient-to-br from-[#006e51] to-[#002b22] rounded-[4rem] p-10 md:p-24 text-white relative overflow-hidden shadow-2xl">
+        <h2 className="text-5xl md:text-8xl font-black mb-8 leading-[0.8] uppercase tracking-tighter italic">VIVE LA PASIÓN <br/><span className="text-yellow-400">COOPTENJO</span></h2>
+        <button onClick={() => setActiveTab('predicciones')} className="bg-white text-[#004d3d] px-14 py-6 rounded-3xl font-black hover:scale-105 transition-all uppercase tracking-widest flex items-center gap-3">Empezar Jugada <ChevronRight /></button>
+      </div>
+      <div className="max-w-4xl mx-auto">
+        <div className="bg-white p-10 rounded-[3rem] shadow-xl">
+           <h3 className="text-[10px] font-black uppercase text-gray-400 mb-6 tracking-widest">Próximo Encuentro</h3>
+           {nextMatch ? (
+             <div className="flex items-center justify-between">
+                <div className="flex flex-col items-center gap-2">
+                   <img src={getFlagUrl(nextMatch.teamA)} className="w-16 h-10 object-cover rounded-lg shadow" alt=""/>
+                   <span className="font-black text-xs uppercase">{nextMatch.teamA}</span>
+                </div>
+                <div className="flex flex-col items-center">
+                   <span className="bg-gray-100 px-4 py-1 rounded-full font-black text-[10px]">VS</span>
+                   <p className="text-[10px] mt-2 font-bold text-gray-400">{formatColDate(nextMatch.date)}</p>
+                </div>
+                <div className="flex flex-col items-center gap-2">
+                   <img src={getFlagUrl(nextMatch.teamB)} className="w-16 h-10 object-cover rounded-lg shadow" alt=""/>
+                   <span className="font-black text-xs uppercase">{nextMatch.teamB}</span>
+                </div>
+             </div>
+           ) : <p className="text-gray-400 font-bold text-xs uppercase">No hay partidos próximos</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PredictionsView({ firebaseUser, currentUser, matches, predictions, formatColDate }) {
+  const [inputs, setInputs] = useState({});
+
+  useEffect(() => {
+    const map = {};
+    predictions.filter(p => p.userId === currentUser.id).forEach(p => {
+      map[p.matchId] = { 
+        a: p.scoreA, 
+        b: p.scoreB, 
+        scorersA: p.scorersA || [],
+        scorersB: p.scorersB || [],
+        id: p.id 
+      };
+    });
+    setInputs(map);
+  }, [predictions, currentUser]);
+
+  const handleSave = async (mId, mDate) => {
+    if (!firebaseUser) return;
+    const val = inputs[mId];
+    if (!val || val.a === '' || val.b === '') return;
+    const data = { 
+        userId: currentUser.id, matchId: mId, 
+        scoreA: parseInt(val.a), scoreB: parseInt(val.b), 
+        scorersA: val.scorersA || [], scorersB: val.scorersB || [],
+        pointsEarned: predictions.find(p => p.matchId === mId && p.userId === currentUser.id)?.pointsEarned || 0 
+    };
+    if (val.id) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'predictions', val.id), data);
+    else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'predictions'), data);
+    alert("¡Jugada registrada!");
+  };
+
+  const updateScorer = (mId, team, idx, name) => {
+    const current = { ...inputs[mId] };
+    const field = team === 'A' ? 'scorersA' : 'scorersB';
+    const newList = [...(current[field] || [])];
+    newList[idx] = name;
+    setInputs({ ...inputs, [mId]: { ...current, [field]: newList } });
+  };
+
+  return (
+    <div className="space-y-10">
+      <div className="grid lg:grid-cols-2 gap-8">
+        {matches.map(m => {
+          const pred = inputs[m.id] || { a: 0, b: 0, scorersA: [], scorersB: [] };
+          const goalsA = parseInt(pred.a) || 0;
+          const goalsB = parseInt(pred.b) || 0;
+          const playersA = teamPlayers[m.teamA] || [];
+          const playersB = teamPlayers[m.teamB] || [];
+
+          return (
+            <div key={m.id} className="bg-white p-8 rounded-[3rem] shadow-xl border border-gray-100">
+              <div className="flex justify-between items-center mb-8">
+                <span className="text-[10px] font-black uppercase text-gray-400">{formatColDate(m.date)}</span>
+                <span className="bg-green-50 text-[#004d3d] px-3 py-1 rounded-full text-[9px] font-black uppercase">Abierto</span>
+              </div>
+              <div className="flex items-center justify-between mb-10">
+                <div className="flex flex-col items-center gap-3 w-1/3">
+                  <img src={getFlagUrl(m.teamA)} className="w-12 h-8 object-cover rounded shadow" alt=""/>
+                  <span className="font-black text-[10px] uppercase text-center">{m.teamA}</span>
+                </div>
+                <div className="flex items-center gap-4">
+                  <input type="number" min="0" className="w-14 h-14 bg-gray-100 rounded-2xl text-center font-black text-2xl outline-none" value={pred.a} onChange={e => setInputs({...inputs, [m.id]: {...pred, a: e.target.value}})} />
+                  <span className="font-black text-gray-300">-</span>
+                  <input type="number" min="0" className="w-14 h-14 bg-gray-100 rounded-2xl text-center font-black text-2xl outline-none" value={pred.b} onChange={e => setInputs({...inputs, [m.id]: {...pred, b: e.target.value}})} />
+                </div>
+                <div className="flex flex-col items-center gap-3 w-1/3">
+                  <img src={getFlagUrl(m.teamB)} className="w-12 h-8 object-cover rounded shadow" alt=""/>
+                  <span className="font-black text-[10px] uppercase text-center">{m.teamB}</span>
+                </div>
+              </div>
+
+              {(goalsA > 0 || goalsB > 0) && (
+                <div className="bg-gray-50 p-6 rounded-[2rem] mb-8 space-y-4">
+                  <p className="text-[9px] font-black uppercase text-gray-400 flex items-center gap-2"><Star size={12} className="text-yellow-500"/> ¿Quién anotará?</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                       {[...Array(goalsA)].map((_, i) => (
+                         <select key={i} className="w-full bg-white border border-gray-200 p-2 rounded-xl text-[10px] font-bold" value={pred.scorersA?.[i] || ''} onChange={e => updateScorer(m.id, 'A', i, e.target.value)}>
+                            <option value="">Goleador {i+1} ({m.teamA})</option>
+                            {playersA.map(p => <option key={p} value={p}>{p}</option>)}
+                            <option value="Autogol">Autogol</option>
+                         </select>
+                       ))}
+                    </div>
+                    <div className="space-y-2">
+                       {[...Array(goalsB)].map((_, i) => (
+                         <select key={i} className="w-full bg-white border border-gray-200 p-2 rounded-xl text-[10px] font-bold" value={pred.scorersB?.[i] || ''} onChange={e => updateScorer(m.id, 'B', i, e.target.value)}>
+                            <option value="">Goleador {i+1} ({m.teamB})</option>
+                            {playersB.map(p => <option key={p} value={p}>{p}</option>)}
+                            <option value="Autogol">Autogol</option>
+                         </select>
+                       ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <button onClick={() => handleSave(m.id, m.date)} className="w-full py-4 bg-[#004d3d] text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg hover:bg-[#006e51] transition-all">Guardar Marcador</button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function HonorView({ firebaseUser, currentUser, matches, bracketData }) {
+  const [selected, setSelected] = useState(bracketData || {});
+  const allTeams = Array.from(new Set(matches.flatMap(m => [m.teamA, m.teamB]))).sort();
+  const allPlayers = Array.from(new Set(Object.values(teamPlayers).flat())).sort();
+
+  const save = async (key, value) => {
+    if (!firebaseUser) return;
+    const newData = { ...selected, [key]: value };
+    setSelected(newData);
+    const ref = doc(db, 'artifacts', appId, 'users', currentUser.id, 'bracket', 'main');
+    await setDoc(ref, newData);
+  };
+
+  const SelectBox = ({ label, phaseKey, options, icon: Icon, variant }) => (
+    <div className={`flex flex-col gap-1 w-full ${variant === 'small' ? 'min-w-[120px]' : ''}`}>
+      <label className="text-[8px] font-black uppercase text-gray-400 ml-1 tracking-widest">{label}</label>
+      <div className="relative">
+        {Icon && <Icon size={10} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-yellow-500" />}
+        <select 
+          value={selected[phaseKey] || ""} 
+          onChange={(e) => save(phaseKey, e.target.value)}
+          className={`w-full bg-white border border-gray-100 rounded-xl ${Icon ? 'pl-7' : 'pl-3'} pr-6 py-2.5 font-black text-[9px] outline-none focus:border-[#006e51] shadow-sm appearance-none cursor-pointer hover:bg-gray-50`}
+        >
+          <option value="">...</option>
+          {options.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="py-6 space-y-12">
+      <div className="bg-white p-8 rounded-[2.5rem] shadow-xl border-t-8 border-yellow-400">
+        <div className="flex items-center gap-3 mb-6">
+          <Flame className="text-yellow-500" size={24} />
+          <h2 className="text-xl font-black uppercase tracking-tighter">Bota de Oro Mundial</h2>
+        </div>
+        <div className="grid md:grid-cols-3 gap-4">
+           <SelectBox label="1º Puesto" phaseKey="top_scorer_1" options={allPlayers} icon={Trophy} />
+           <SelectBox label="2º Puesto" phaseKey="top_scorer_2" options={allPlayers} icon={Medal} />
+           <SelectBox label="3º Puesto" phaseKey="top_scorer_3" options={allPlayers} icon={Star} />
+        </div>
+      </div>
+
+      <div className="relative overflow-x-auto pb-10 scrollbar-hide">
+        <div className="flex gap-12 items-start min-w-[1000px]">
+          
+          <div className="flex flex-col gap-6">
+            <h3 className="text-[10px] font-black uppercase text-yellow-600 bg-yellow-50 px-3 py-1 rounded-full w-fit">Octavos</h3>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+              {[...Array(16)].map((_, i) => <SelectBox key={i} label={`Cupo ${i+1}`} phaseKey={`o_${i}`} options={officialTeams} variant="small" />)}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-8 pt-10">
+            <h3 className="text-[10px] font-black uppercase text-blue-600 bg-blue-50 px-3 py-1 rounded-full w-fit">Cuartos</h3>
+            <div className="flex flex-col gap-10">
+              {[...Array(8)].map((_, i) => <SelectBox key={i} label={`Llave ${i+1}`} phaseKey={`c_${i}`} options={officialTeams} />)}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-20 pt-24">
+            <h3 className="text-[10px] font-black uppercase text-purple-600 bg-purple-50 px-3 py-1 rounded-full w-fit">Semis</h3>
+            <div className="flex flex-col gap-32">
+              {[...Array(4)].map((_, i) => <SelectBox key={i} label={`Semi ${i+1}`} phaseKey={`s_${i}`} options={officialTeams} />)}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-32 pt-48">
+            <h3 className="text-[10px] font-black uppercase text-orange-600 bg-orange-50 px-3 py-1 rounded-full w-fit">Final</h3>
+            <div className="flex flex-col gap-40">
+              {[...Array(2)].map((_, i) => <SelectBox key={i} label={`Finalista ${i+1}`} phaseKey={`f_${i}`} options={officialTeams} />)}
+            </div>
+          </div>
+
+          <div className="pt-72">
+             <div className="bg-gradient-to-br from-yellow-400 to-yellow-600 p-8 rounded-[2.5rem] shadow-2xl text-[#004d3d] border-4 border-white/40 transform hover:scale-105 transition-transform">
+                <Trophy size={48} className="mx-auto mb-4 animate-pulse" />
+                <SelectBox label="EL CAMPEÓN" phaseKey="winner" options={officialTeams} />
+             </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RankingView({ users, currentUser }) {
+  const sorted = [...users].sort((a,b) => (b.points || 0) - (a.points || 0));
+  return (
+    <div className="max-w-3xl mx-auto py-10">
+      <h2 className="text-4xl font-black uppercase text-center mb-10 text-[#004d3d] italic">Cuadro de Líderes</h2>
+      <div className="bg-white rounded-[3rem] shadow-xl overflow-hidden">
+        {sorted.map((u, i) => (
+          <div key={u.id} className={`p-8 flex items-center justify-between border-b last:border-0 ${u.id === currentUser.id ? 'bg-yellow-50' : ''}`}>
+            <div className="flex items-center gap-6">
+              <span className={`font-black text-3xl w-10 ${i < 3 ? 'text-yellow-500' : 'text-gray-200'}`}>{i+1}</span>
+              <p className="font-black uppercase text-lg">{u.name}</p>
+            </div>
+            <div className="text-right">
+              <p className="font-black text-4xl text-[#004d3d]">{u.points || 0}</p>
+              <p className="text-[9px] font-black uppercase text-gray-400">Puntos</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AdminView({ firebaseUser, users, matches, predictions, formatColDate }) {
+  const [subTab, setSubTab] = useState('matches');
+  const [fetching, setFetching] = useState(false);
+  const [editingMatch, setEditingMatch] = useState(null);
+  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'user' });
+  const [newMatch, setNewMatch] = useState({ teamA: '', teamB: '', date: '', status: 'pending' });
+
+  const handleFetchAPI = async () => {
+    setFetching(true);
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: "Genera 5 partidos reales para el mundial 2026 en JSON. Incluye teamA, teamB, date (ISO). Solo JSON." }] }]
+        })
+      });
+      const res = await response.json();
+      const text = res.candidates?.[0]?.content?.parts?.[0]?.text;
+      const data = JSON.parse(text.replace(/```json|```/g, "").trim());
+      for (const m of data) await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'matches'), { ...m, status: 'pending', scoreA: 0, scoreB: 0 });
+      alert("Partidos importados.");
+    } catch (e) { alert("Error API"); }
+    finally { setFetching(false); }
+  };
+
+  const handleAddMatch = async (e) => {
+    e.preventDefault();
+    if (!newMatch.teamA || !newMatch.teamB || !newMatch.date) return;
+    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'matches'), { ...newMatch, scoreA: 0, scoreB: 0 });
+    setNewMatch({ teamA: '', teamB: '', date: '', status: 'pending' });
+    setSubTab('matches');
+    alert("Partido agregado exitosamente.");
+  };
+
+  const handleAddUser = async (e) => {
+    e.preventDefault();
+    if (!newUser.name || !newUser.email || !newUser.password) return;
+    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'users'), { ...newUser, points: 0 });
+    setNewUser({ name: '', email: '', password: '', role: 'user' });
+    alert("Usuario agregado con éxito.");
+  };
+
+  const handleUpdateMatch = async (e) => {
+    e.preventDefault();
+    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'matches', editingMatch.id), editingMatch);
+    setEditingMatch(null);
+    alert("Partido actualizado.");
+  };
+
+  return (
+    <div className="bg-white p-10 rounded-[3rem] shadow-2xl space-y-10">
+      <div className="flex flex-wrap gap-4 border-b pb-6">
+        <NavBtn label="Gestión Partidos" active={subTab==='matches'} onClick={()=>setSubTab('matches')} />
+        <NavBtn label="Agregar Partido" active={subTab==='add_match'} onClick={()=>setSubTab('add_match')} />
+        <NavBtn label="Nuevo Usuario" active={subTab==='new_user'} onClick={()=>setSubTab('new_user')} />
+        <NavBtn label="Lista Usuarios" active={subTab==='users'} onClick={()=>setSubTab('users')} />
+      </div>
+
+      {subTab === 'matches' && (
+        <div className="space-y-6">
+          <div className="flex gap-4">
+            <button onClick={handleFetchAPI} disabled={fetching} className="flex items-center gap-2 bg-[#004d3d] text-white px-8 py-4 rounded-2xl font-black uppercase text-[10px] tracking-widest">
+               <Zap size={16}/> Sincronizar Automático
+            </button>
+          </div>
+          
+          {editingMatch ? (
+            <form onSubmit={handleUpdateMatch} className="bg-gray-50 p-8 rounded-3xl space-y-4 border-2 border-dashed border-[#004d3d]">
+              <h4 className="font-black text-sm uppercase">Editando Partido</h4>
+              <div className="grid md:grid-cols-2 gap-4">
+                <select className="p-3 border rounded-xl font-bold" value={editingMatch.teamA} onChange={e => setEditingMatch({...editingMatch, teamA: e.target.value})}>
+                  <option value="">Seleccionar Local</option>
+                  {officialTeams.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <select className="p-3 border rounded-xl font-bold" value={editingMatch.teamB} onChange={e => setEditingMatch({...editingMatch, teamB: e.target.value})}>
+                  <option value="">Seleccionar Visitante</option>
+                  {officialTeams.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <input type="datetime-local" className="p-3 border rounded-xl font-bold" value={editingMatch.date.split('.')[0]} onChange={e => setEditingMatch({...editingMatch, date: e.target.value})} />
+                <select className="p-3 border rounded-xl font-bold" value={editingMatch.status} onChange={e => setEditingMatch({...editingMatch, status: e.target.value})}>
+                  <option value="pending">Pendiente</option>
+                  <option value="finished">Finalizado</option>
+                </select>
+              </div>
+              <div className="flex gap-2">
+                <button type="submit" className="bg-[#004d3d] text-white px-6 py-3 rounded-xl font-black uppercase text-xs">Guardar Cambios</button>
+                <button type="button" onClick={()=>setEditingMatch(null)} className="bg-gray-300 px-6 py-3 rounded-xl font-black uppercase text-xs">Cancelar</button>
+              </div>
+            </form>
+          ) : (
+            <div className="grid gap-4">
+              {matches.map(m => (
+                <div key={m.id} className="p-6 border rounded-2xl flex justify-between items-center hover:shadow-md transition-shadow">
+                  <div className="flex items-center gap-4">
+                     <span className="font-black text-xs uppercase">{m.teamA} vs {m.teamB}</span>
+                     <span className={`text-[8px] font-black px-2 py-1 rounded-full ${m.status === 'finished' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+                        {m.status === 'finished' ? 'CERRADO' : 'ABIERTO'}
+                     </span>
+                  </div>
+                  <button onClick={()=>setEditingMatch(m)} className="text-[#004d3d] hover:bg-gray-100 p-2 rounded-xl"><Edit3 size={18}/></button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {subTab === 'add_match' && (
+        <form onSubmit={handleAddMatch} className="max-w-md space-y-4 bg-gray-50 p-8 rounded-[2.5rem]">
+          <h4 className="font-black uppercase text-[#004d3d] text-xs">Crear Partido Manualmente</h4>
+          <select className="w-full p-4 border-2 rounded-2xl outline-none focus:border-[#004d3d] font-bold" value={newMatch.teamA} onChange={e => setNewMatch({...newMatch, teamA: e.target.value})} required>
+            <option value="">Equipo Local</option>
+            {officialTeams.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select className="w-full p-4 border-2 rounded-2xl outline-none focus:border-[#004d3d] font-bold" value={newMatch.teamB} onChange={e => setNewMatch({...newMatch, teamB: e.target.value})} required>
+            <option value="">Equipo Visitante</option>
+            {officialTeams.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <input type="datetime-local" className="w-full p-4 border-2 rounded-2xl outline-none focus:border-[#004d3d] font-bold" value={newMatch.date} onChange={e => setNewMatch({...newMatch, date: e.target.value})} required />
+          <button type="submit" className="w-full bg-[#004d3d] text-white py-4 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-2">
+            <Plus size={18}/> Crear Partido
+          </button>
+        </form>
+      )}
+
+      {subTab === 'new_user' && (
+        <form onSubmit={handleAddUser} className="max-w-md space-y-4">
+          <h4 className="font-black uppercase text-gray-400 text-xs">Registrar nuevo colaborador</h4>
+          <input className="w-full p-4 border-2 rounded-2xl outline-none focus:border-[#004d3d] font-bold" placeholder="Nombre Completo" value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})} required />
+          <input className="w-full p-4 border-2 rounded-2xl outline-none focus:border-[#004d3d] font-bold" placeholder="Correo corporativo" type="email" value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} required />
+          <input className="w-full p-4 border-2 rounded-2xl outline-none focus:border-[#004d3d] font-bold" placeholder="Contraseña/Pin" type="password" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} required />
+          <select className="w-full p-4 border-2 rounded-2xl outline-none focus:border-[#004d3d] font-bold" value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})}>
+            <option value="user">Colaborador (User)</option>
+            <option value="admin">Administrador (Admin)</option>
+          </select>
+          <button type="submit" className="w-full bg-[#004d3d] text-white py-4 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-2">
+            <UserPlus size={18}/> Crear Usuario
+          </button>
+        </form>
+      )}
+
+      {subTab === 'users' && (
+        <div className="grid gap-2">
+          {users.map(u => (
+            <div key={u.id} className="p-4 bg-gray-50 rounded-2xl flex justify-between items-center">
+              <div>
+                <p className="font-black text-xs uppercase">{u.name}</p>
+                <p className="text-[9px] text-gray-400 font-bold">{u.email} • Pin: {u.password}</p>
+              </div>
+              <div className="flex items-center gap-4">
+                <span className={`text-[8px] font-black px-2 py-1 rounded-full ${u.role === 'admin' ? 'bg-red-500 text-white' : 'bg-blue-500 text-white'}`}>{u.role.toUpperCase()}</span>
+                <span className="font-black text-[#004d3d]">{u.points} PTS</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NavBtn({ label, active, onClick, isAdmin }) {
+  return (
+    <button onClick={onClick} className={`px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${active ? (isAdmin ? 'bg-red-600 text-white shadow-lg' : 'bg-yellow-400 text-[#004d3d] shadow-lg') : 'text-green-800 bg-green-50 hover:bg-green-100'}`}>
+      {label}
+    </button>
+  );
+}
