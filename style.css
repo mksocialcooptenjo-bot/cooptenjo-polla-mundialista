@@ -1,0 +1,24 @@
+/* Colores de Marca Cooptenjo */
+:root {
+    --coop-green: #004d3d;
+    --coop-light-green: #006e51;
+    --coop-yellow: #facc15;
+}
+
+body {
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.card-gradient {
+    background: linear-gradient(135deg, var(--coop-light-green), var(--coop-green));
+}
+
+input:focus {
+    border-color: var(--coop-light-green);
+}
+
+/* Scrollbar invisible para el bracket */
+.scrollbar-hide::-webkit-scrollbar {
+    display: none;
+}
